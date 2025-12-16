@@ -6,17 +6,203 @@ This guide provides detailed instructions for testing database connectivity, bac
 
 ## Table of Contents
 
-1. [Database Connectivity Testing](#1-database-connectivity-testing)
-2. [Backend API Testing](#2-backend-api-testing)
-3. [Frontend Testing](#3-frontend-testing)
-4. [End-to-End Testing](#4-end-to-end-testing)
-5. [Troubleshooting Connectivity](#5-troubleshooting-connectivity)
+1. [Architecture Flow Diagram](#1-architecture-flow-diagram)
+2. [Database Connectivity Testing](#2-database-connectivity-testing)
+3. [Backend API Testing](#3-backend-api-testing)
+4. [Frontend Testing](#4-frontend-testing)
+5. [End-to-End Testing](#5-end-to-end-testing)
+6. [Troubleshooting Connectivity](#6-troubleshooting-connectivity)
 
 ---
 
-## 1. Database Connectivity Testing
+## 1. Architecture Flow Diagram
 
-### 1.1 Basic PostgreSQL Connection Test
+### 1.1 Testing Flow Overview
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                          CLIENT (Browser/Curl)                          │
+└────────────────────────────────┬────────────────────────────────────────┘
+                                 │
+                                 │ HTTPS/HTTP Request
+                                 │ Port 443/80
+                                 ▼
+┌─────────────────────────────────────────────────────────────────────────┐
+│                            NGINX (Reverse Proxy)                        │
+│  • SSL Termination                                                      │
+│  • Static File Serving (/var/www/bmi-tracker/dist)                     │
+│  • API Proxy (Location /api/ → http://localhost:3000)                  │
+└────────────────┬────────────────────────────────────┬───────────────────┘
+                 │                                    │
+                 │ Static Files                       │ API Requests
+                 │ (HTML/JS/CSS)                      │ Proxied to Backend
+                 ▼                                    ▼
+┌─────────────────────────────┐  ┌─────────────────────────────────────────┐
+│   FRONTEND (React + Vite)   │  │   BACKEND (Express.js + Node.js)        │
+│  • Built static assets      │  │  • Port 3000 (localhost only)           │
+│  • Served by Nginx          │  │  • PM2 Process Management               │
+│  • Client-side routing      │  │  • CORS Configuration                   │
+└─────────────────────────────┘  │  • Health Endpoint: /health             │
+                                 │  • API Routes:                           │
+                                 │    - POST /api/measurements              │
+                                 │    - GET  /api/measurements              │
+                                 │    - GET  /api/measurements/trends       │
+                                 └────────────────┬─────────────────────────┘
+                                                  │
+                                                  │ SQL Queries
+                                                  │ Connection Pool (max: 20)
+                                                  ▼
+                                 ┌─────────────────────────────────────────┐
+                                 │   DATABASE (PostgreSQL 12+)             │
+                                 │  • Port 5432 (localhost only)           │
+                                 │  • Database: bmi_tracker                │
+                                 │  • Table: measurements                  │
+                                 │    - id (SERIAL PRIMARY KEY)            │
+                                 │    - weight_kg (DECIMAL)                │
+                                 │    - height_cm (DECIMAL)                │
+                                 │    - age (INTEGER)                      │
+                                 │    - sex (VARCHAR)                      │
+                                 │    - activity_level (VARCHAR)           │
+                                 │    - bmi (DECIMAL)                      │
+                                 │    - bmr (DECIMAL)                      │
+                                 │    - daily_calories (DECIMAL)           │
+                                 │    - created_at (TIMESTAMP)             │
+                                 │    - measurement_date (DATE)            │
+                                 └─────────────────────────────────────────┘
+```
+
+### 1.2 Testing Sequence Flow
+
+```
+┌───────────────────────────────────────────────────────────────────────────┐
+│                        CONNECTIVITY TESTING FLOW                          │
+└───────────────────────────────────────────────────────────────────────────┘
+
+TEST 1: Database Layer
+┌─────────────────────────────────────────────────────────────────────────┐
+│ 1.1 Service Status    → sudo systemctl status postgresql               │
+│ 1.2 Login Test        → psql -U bmi_user -d bmi_tracker                │
+│ 1.3 Table Check       → SELECT * FROM measurements LIMIT 1;            │
+│ 1.4 Connection Pool   → node test-db-connection.js                     │
+└────────────────────────────────┬────────────────────────────────────────┘
+                                 │
+                              ✓ PASS
+                                 │
+                                 ▼
+TEST 2: Backend Layer
+┌─────────────────────────────────────────────────────────────────────────┐
+│ 2.1 PM2 Status        → pm2 status                                     │
+│ 2.2 Health Endpoint   → curl http://localhost:3000/health              │
+│ 2.3 GET Measurements  → curl http://localhost:3000/api/measurements    │
+│ 2.4 POST Measurement  → curl -X POST with JSON payload                 │
+│ 2.5 GET Trends        → curl http://localhost:3000/api/measurements/   │
+│                            trends?days=7                                │
+└────────────────────────────────┬────────────────────────────────────────┘
+                                 │
+                              ✓ PASS
+                                 │
+                                 ▼
+TEST 3: Nginx Layer
+┌─────────────────────────────────────────────────────────────────────────┐
+│ 3.1 Service Status    → sudo systemctl status nginx                    │
+│ 3.2 Config Test       → sudo nginx -t                                  │
+│ 3.3 Static Files      → curl http://localhost/                         │
+│ 3.4 API Proxy         → curl http://localhost/api/measurements         │
+└────────────────────────────────┬────────────────────────────────────────┘
+                                 │
+                              ✓ PASS
+                                 │
+                                 ▼
+TEST 4: Frontend Layer
+┌─────────────────────────────────────────────────────────────────────────┐
+│ 4.1 Build Artifacts   → ls -la /var/www/bmi-tracker/dist/              │
+│ 4.2 Public Access     → curl http://<EC2-IP>/                          │
+│ 4.3 HTTPS Access      → curl https://<DOMAIN>/                         │
+│ 4.4 Browser Test      → Open in browser and verify UI                  │
+└────────────────────────────────┬────────────────────────────────────────┘
+                                 │
+                              ✓ PASS
+                                 │
+                                 ▼
+TEST 5: End-to-End Flow
+┌─────────────────────────────────────────────────────────────────────────┐
+│ 5.1 Submit Form       → Enter weight, height, age, sex, activity, date │
+│ 5.2 Verify Storage    → Check data in PostgreSQL table                 │
+│ 5.3 Verify Display    → Confirm measurements appear in UI              │
+│ 5.4 Verify Trends     → Check Chart.js visualization updates           │
+└─────────────────────────────────────────────────────────────────────────┘
+                                 │
+                              ✓ ALL TESTS PASSED
+                                 │
+                                 ▼
+                         🎉 SYSTEM OPERATIONAL
+```
+
+### 1.3 Data Flow Example
+
+```
+USER SUBMITS FORM
+├─ weight: 70 kg
+├─ height: 175 cm
+├─ age: 30
+├─ sex: male
+├─ activity: moderate
+└─ date: 2025-12-15
+
+                     ▼
+            React Form Validation
+         (MeasurementForm.jsx)
+                     │
+                     ▼
+          Axios POST Request
+       /api/measurements
+   {weightKg, heightCm, age, sex, activity, measurementDate}
+                     │
+                     ▼
+              Nginx Proxy
+        (Port 80/443 → 3000)
+                     │
+                     ▼
+         Express.js Route Handler
+            (routes.js)
+                     │
+                     ▼
+          BMI/BMR Calculations
+          (calculations.js)
+          • BMI = 70 / (1.75²) = 22.86
+          • BMR = 1580 (Mifflin-St Jeor)
+          • Daily Calories = 2449 (moderate activity)
+                     │
+                     ▼
+         PostgreSQL INSERT Query
+              (db.js)
+   INSERT INTO measurements VALUES (...)
+                     │
+                     ▼
+            Database Storage
+      measurement_date: 2025-12-15
+      created_at: 2025-12-16 10:30:00
+                     │
+                     ▼
+          200 OK Response
+   {id: 123, bmi: 22.86, bmr: 1580, ...}
+                     │
+                     ▼
+          React State Update
+              (App.jsx)
+                     │
+                     ▼
+           UI Re-render
+   • Measurements table updated
+   • Chart.js trend graph refreshed
+   • Success notification displayed
+```
+
+---
+
+## 2. Database Connectivity Testing
+
+### 2.1 Basic PostgreSQL Connection Test
 
 ```bash
 # Test PostgreSQL is running
@@ -25,7 +211,7 @@ sudo systemctl status postgresql
 # Expected output: "active (running)"
 ```
 
-### 1.2 Connect to Database
+### 2.2 Connect to Database
 
 ```bash
 # Connect using psql client
@@ -36,7 +222,7 @@ psql -U bmi_user -d bmidb -h localhost
 
 **Expected:** You should see the PostgreSQL prompt: `bmidb=>`
 
-### 1.3 Test Database Queries
+### 2.3 Test Database Queries
 
 Once connected to PostgreSQL:
 
@@ -76,7 +262,7 @@ ORDER BY measurement_date;
 \q
 ```
 
-### 1.4 Connection String Test
+### 2.4 Connection String Test
 
 ```bash
 # Test connection using DATABASE_URL
@@ -92,7 +278,7 @@ PGPASSWORD=$DB_PASSWORD psql -U $DB_USER -d $DB_NAME -h $DB_HOST -c "SELECT 1;"
 # Expected: Shows "1"
 ```
 
-### 1.5 Check Database Configuration
+### 2.5 Check Database Configuration
 
 ```bash
 # View PostgreSQL configuration
@@ -108,7 +294,7 @@ sudo -u postgres psql -c "\l bmidb"
 # Expected: Shows bmidb database details
 ```
 
-### 1.6 Test Database from Backend Code
+### 2.6 Test Database from Backend Code
 
 ```bash
 cd /home/ubuntu/bmi-health-tracker/backend
@@ -136,9 +322,9 @@ Database connected at: 2025-12-16T14:30:00.000Z
 
 ---
 
-## 2. Backend API Testing
+## 3. Backend API Testing
 
-### 2.1 Check Backend is Running
+### 3.1 Check Backend is Running
 
 ```bash
 # Check PM2 status
@@ -159,7 +345,7 @@ sudo netstat -tlnp | grep :3000
 # Expected: Shows node process listening on 127.0.0.1:3000
 ```
 
-### 2.2 Test Health Endpoint
+### 3.2 Test Health Endpoint
 
 ```bash
 # Simple test
@@ -175,7 +361,7 @@ curl -v http://localhost:3000/health
 curl -s http://localhost:3000/health | jq .
 ```
 
-### 2.3 Test GET All Measurements
+### 3.3 Test GET All Measurements
 
 ```bash
 # Get all measurements
@@ -192,7 +378,7 @@ curl -I http://localhost:3000/api/measurements
 # Expected: HTTP/1.1 200 OK, Content-Type: application/json
 ```
 
-### 2.4 Test POST Create Measurement
+### 3.4 Test POST Create Measurement
 
 #### Test 1: Valid Measurement
 
@@ -273,7 +459,7 @@ curl -X POST http://localhost:3000/api/measurements \
 # {"error":"Invalid values: must be positive numbers"}
 ```
 
-### 2.5 Test GET Trends Endpoint
+### 3.5 Test GET Trends Endpoint
 
 ```bash
 # Get 30-day BMI trends
@@ -292,7 +478,7 @@ curl http://localhost:3000/api/measurements/trends
 curl -s http://localhost:3000/api/measurements/trends | jq .
 ```
 
-### 2.6 Test All Activity Levels
+### 3.6 Test All Activity Levels
 
 ```bash
 # Test each activity level
@@ -314,7 +500,7 @@ done
 
 **Expected:** Different calorie values for each activity level
 
-### 2.7 Test CORS Headers
+### 3.7 Test CORS Headers
 
 ```bash
 # Test CORS headers
@@ -326,7 +512,7 @@ curl -H "Origin: http://localhost:5173" \
 # Expected: Access-Control-Allow-Origin header in response
 ```
 
-### 2.8 Backend API Endpoint Summary
+### 3.8 Backend API Endpoint Summary
 
 | Endpoint | Method | Description | Request Body | Response |
 |----------|--------|-------------|--------------|----------|
@@ -335,7 +521,7 @@ curl -H "Origin: http://localhost:5173" \
 | `/api/measurements` | POST | Create measurement | JSON with health data | `{"measurement":{...}}` |
 | `/api/measurements/trends` | GET | Get 30-day BMI trends | None | `{"rows":[{"day":"...","avg_bmi":"..."}]}` |
 
-### 2.9 Performance Testing
+### 3.9 Performance Testing
 
 ```bash
 # Test response time
@@ -354,9 +540,9 @@ curl http://localhost:3000/health
 
 ---
 
-## 3. Frontend Testing
+## 4. Frontend Testing
 
-### 3.1 Check Nginx is Running
+### 4.1 Check Nginx is Running
 
 ```bash
 # Check Nginx status
@@ -374,7 +560,7 @@ sudo netstat -tlnp | grep :80
 # Expected: Shows nginx listening on 0.0.0.0:80
 ```
 
-### 3.2 Test Frontend Static Files
+### 4.2 Test Frontend Static Files
 
 ```bash
 # Test root page (index.html)
@@ -396,7 +582,7 @@ ls -la /var/www/bmi-health-tracker/index.html
 sudo -u www-data test -r /var/www/bmi-health-tracker/index.html && echo "Readable" || echo "Permission denied"
 ```
 
-### 3.3 Test Frontend Assets
+### 4.3 Test Frontend Assets
 
 ```bash
 # List all deployed files
@@ -417,7 +603,7 @@ curl -I http://localhost/assets/*.css
 # Expected: HTTP/1.1 200 OK, Content-Type: text/css
 ```
 
-### 3.4 Test API Proxy (Frontend → Backend)
+### 4.4 Test API Proxy (Frontend → Backend)
 
 ```bash
 # Test API through Nginx proxy
@@ -445,7 +631,7 @@ curl -X POST http://localhost/api/measurements \
 # Expected: Same response as direct backend call
 ```
 
-### 3.5 Test from Public IP
+### 4.5 Test from Public IP
 
 ```bash
 # Get your EC2 public IP
@@ -465,7 +651,7 @@ curl http://$PUBLIC_IP/
 curl http://$PUBLIC_IP/api/measurements
 ```
 
-### 3.6 Test Frontend Routing
+### 4.6 Test Frontend Routing
 
 ```bash
 # Test root route
@@ -481,7 +667,7 @@ curl -I http://localhost/api/measurements
 # Expected: 200 OK
 ```
 
-### 3.7 Check Frontend Logs
+### 4.7 Check Frontend Logs
 
 ```bash
 # Nginx access logs
@@ -497,7 +683,7 @@ sudo tail -f /var/log/nginx/bmi-access.log
 sudo grep "error" /var/log/nginx/bmi-error.log
 ```
 
-### 3.8 Test Compression
+### 4.8 Test Compression
 
 ```bash
 # Check if gzip compression is working
@@ -513,9 +699,9 @@ curl -H "Accept-Encoding: gzip" http://localhost/ | file -
 
 ---
 
-## 4. End-to-End Testing
+## 5. End-to-End Testing
 
-### 4.1 Complete User Flow Test
+### 5.1 Complete User Flow Test
 
 ```bash
 #!/bin/bash
@@ -598,7 +784,7 @@ chmod +x e2e-test.sh
 ./e2e-test.sh
 ```
 
-### 4.2 Browser Testing Checklist
+### 5.2 Browser Testing Checklist
 
 Open your browser and navigate to `http://YOUR_EC2_PUBLIC_IP`
 
@@ -645,9 +831,9 @@ fetch('/api/measurements', {
 
 ---
 
-## 5. Troubleshooting Connectivity
+## 6. Troubleshooting Connectivity
 
-### 5.1 Database Connection Issues
+### 6.1 Database Connection Issues
 
 **Problem: "Connection refused"**
 ```bash
@@ -687,7 +873,7 @@ sudo -u postgres psql -c "CREATE DATABASE bmidb;"
 sudo -u postgres psql -c "GRANT ALL PRIVILEGES ON DATABASE bmidb TO bmi_user;"
 ```
 
-### 5.2 Backend Connection Issues
+### 6.2 Backend Connection Issues
 
 **Problem: "Cannot connect to backend"**
 ```bash
@@ -736,7 +922,7 @@ node src/server.js
 # Watch for error messages
 ```
 
-### 5.3 Frontend Connection Issues
+### 6.3 Frontend Connection Issues
 
 **Problem: "404 Not Found"**
 ```bash
@@ -781,7 +967,7 @@ curl http://localhost:3000/api/measurements
 sudo nginx -t && sudo systemctl reload nginx
 ```
 
-### 5.4 Firewall Issues
+### 6.4 Firewall Issues
 
 **Problem: "Can't access from browser but works locally"**
 ```bash
@@ -803,7 +989,7 @@ curl http://localhost/
 curl http://checkip.amazonaws.com
 ```
 
-### 5.5 Quick Diagnostic Script
+### 6.5 Quick Diagnostic Script
 
 ```bash
 #!/bin/bash
