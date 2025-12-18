@@ -89,6 +89,15 @@ check_prerequisites() {
     
     local all_good=true
     
+    # Load NVM if it exists (Node.js was likely installed via NVM)
+    if [ -s "$HOME/.nvm/nvm.sh" ]; then
+        print_info "Loading NVM environment..."
+        export NVM_DIR="$HOME/.nvm"
+        [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
+        [ -s "$NVM_DIR/bash_completion" ] && \. "$NVM_DIR/bash_completion"
+        print_success "NVM loaded"
+    fi
+    
     # Check if project directory exists
     if [ ! -d "$PROJECT_DIR" ]; then
         print_error "Project directory not found: $PROJECT_DIR"

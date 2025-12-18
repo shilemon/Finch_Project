@@ -296,6 +296,32 @@ check_prerequisites() {
             
             if [ -s "$HOME/.nvm/nvm.sh" ]; then
                 print_success "NVM installed successfully"
+                
+                # Ensure NVM is added to shell profile for persistence
+                print_info "Adding NVM to shell profile..."
+                
+                # Detect shell profile file
+                if [ -n "$BASH_VERSION" ]; then
+                    PROFILE_FILE="$HOME/.bashrc"
+                elif [ -n "$ZSH_VERSION" ]; then
+                    PROFILE_FILE="$HOME/.zshrc"
+                else
+                    PROFILE_FILE="$HOME/.bashrc"  # Default to bashrc
+                fi
+                
+                # Check if NVM is already in profile
+                if ! grep -q 'NVM_DIR' "$PROFILE_FILE" 2>/dev/null; then
+                    cat >> "$PROFILE_FILE" << 'NVMEOF'
+
+# Load NVM
+export NVM_DIR="$HOME/.nvm"
+[ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
+[ -s "$NVM_DIR/bash_completion" ] && \. "$NVM_DIR/bash_completion"
+NVMEOF
+                    print_success "NVM added to $PROFILE_FILE"
+                else
+                    print_info "NVM already in shell profile"
+                fi
             else
                 print_error "Failed to install NVM"
                 ((errors++))
