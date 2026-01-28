@@ -1,16 +1,30 @@
-version: "3.8"
-
 services:
   frontend:
-    build: ./frontend
+    image: emon110852/finch-frontend
     ports:
       - "3000:80"
     depends_on:
       - backend
 
   backend:
-    build: ./backend
+    image: emon110852/finch-backend
     ports:
-      - "5000:5000"
+      - "5000:3000"   # host:container (because backend listens on 3000)
     environment:
-      - NODE_ENV=production
+      NODE_ENV: production
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_USER: admin
+      DB_PASSWORD: password
+      DB_NAME: finchdb
+      # If your backend supports a single URL, this is even better:
+      DATABASE_URL: postgres://admin:password@postgres:5432/finchdb
+    depends_on:
+      - postgres
+
+  postgres:
+    image: postgres:15
+    environment:
+      POSTGRES_USER: admin
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: finchdb
